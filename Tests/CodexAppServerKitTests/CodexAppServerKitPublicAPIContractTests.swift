@@ -147,6 +147,14 @@ final class CodexAppServerKitPublicAPIContractTests: XCTestCase {
 	/// that is now an ownership choice rather than a memory-safety
 	/// precondition — the type used to carry unsynchronized mutable state
 	/// behind a doc-comment-only confinement rule.
+	///
+	/// Note what each half proves. `requireSendable` is a COMPILE-TIME pin, but
+	/// this target builds in Swift 5 language mode, where an unsatisfied
+	/// `Sendable` requirement is a warning rather than an error — it documents
+	/// the conformance and would harden into an error under Swift 6. The
+	/// runtime half is the load-bearing half: it drives the store from a
+	/// detached task and back, which is exactly the cross-domain access that
+	/// corrupted the dictionaries before they were serialized.
 	func testRequestStoreIsSendableAndUsableAcrossIsolationDomains() async {
 		func requireSendable<Value: Sendable>(_ value: Value) -> Value { value }
 		let store = requireSendable(CodexRPCRequestStore())

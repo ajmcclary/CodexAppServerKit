@@ -94,6 +94,12 @@ final class CodexRPCRequestStoreTests: XCTestCase {
 					after: 2,
 					poison: { metadata in
 						observed.metadata = metadata
+						// Read BEFORE the sweep: this is the load-bearing
+						// assertion. Only the sibling may still be pending —
+						// if `fireTimeout` had not removed the timing-out
+						// request before calling out, this would be 2 and the
+						// sweep below would resume it a second time.
+						observed.pendingBeforeFailAll = store.pendingCount
 						// Exactly what CodexAppServerClient.invalidateTransport does.
 						store.failAll(error: CodexClientError.processNotRunning)
 						observed.pendingAfterFailAll = store.pendingCount
@@ -110,12 +116,16 @@ final class CodexRPCRequestStoreTests: XCTestCase {
 		do { _ = try await sibling.value } catch { siblingError = error }
 		XCTAssertTrue(siblingError is CodexClientError, "The sibling is swept by the re-entrant failAll")
 		XCTAssertEqual(observed.metadata, .init(method: "thread/start", transportGeneration: 7))
-		XCTAssertEqual(observed.pendingAfterFailAll, 0, "The re-entrant sweep must not see the request being timed out")
+		XCTAssertEqual(
+			observed.pendingBeforeFailAll, 1,
+			"Only the sibling is still pending — the timed-out request was removed before poison ran")
+		XCTAssertEqual(observed.pendingAfterFailAll, 0, "The re-entrant sweep drains what is left")
 		XCTAssertEqual(store.pendingCount, 0)
 	}
 
 	private final class ReentrantPoisonRecord: @unchecked Sendable {
 		var metadata: CodexRPCRequestStore.Metadata?
+		var pendingBeforeFailAll = -1
 		var pendingAfterFailAll = -1
 	}
 
@@ -267,6 +277,7 @@ final class CodexRPCRequestStoreTests: XCTestCase {
 	func testConcurrentResolutionTimeoutAndFailAllStayExactlyOnce() async {
 		let store = CodexRPCRequestStore()
 		let outcomes = OutcomeTally()
+		let completedIDs = IdentifierTally()
 		let workers = 6
 		let requestsPerWorker = 150
 
@@ -298,6 +309,7 @@ final class CodexRPCRequestStoreTests: XCTestCase {
 						} catch {
 							outcomes.recordFailed()
 						}
+						completedIDs.record(id)
 					}
 				}
 			}
@@ -310,14 +322,40 @@ final class CodexRPCRequestStoreTests: XCTestCase {
 			}
 		}
 
+		// `outcomes.total` is structurally guaranteed once the group returns —
+		// it is the HANG/TRAP detector (a lost resume never returns; a double
+		// resume traps inside CheckedContinuation). The distinct-id assertion
+		// is the one that can fail with a plain diff: a torn `makeRequestID`
+		// hands the same string to two workers even when the process survives.
+		XCTAssertEqual(outcomes.total, workers * requestsPerWorker)
 		XCTAssertEqual(
-			outcomes.total,
+			completedIDs.distinctCount,
 			workers * requestsPerWorker,
-			"Every request resumes exactly once — no lost resume and no double resume"
+			"Every request carried a distinct id through registration, resolution, and the sweep"
+		)
+		XCTAssertEqual(
+			store.peekNextRequestID,
+			workers * requestsPerWorker + 1,
+			"The allocator observed every request exactly once under the failAll storm"
 		)
 		store.failAll(error: CodexClientError.processNotRunning)
 		XCTAssertEqual(store.pendingCount, 0)
 		XCTAssertEqual(store.timeoutTaskCount, 0)
+	}
+
+	private final class IdentifierTally: @unchecked Sendable {
+		private let lock = NSLock()
+		private var identifiers: Set<String> = []
+
+		func record(_ identifier: String) {
+			lock.lock(); defer { lock.unlock() }
+			identifiers.insert(identifier)
+		}
+
+		var distinctCount: Int {
+			lock.lock(); defer { lock.unlock() }
+			return identifiers.count
+		}
 	}
 
 	private final class OutcomeTally: @unchecked Sendable {
