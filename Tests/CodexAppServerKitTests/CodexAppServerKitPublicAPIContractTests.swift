@@ -141,6 +141,22 @@ final class CodexAppServerKitPublicAPIContractTests: XCTestCase {
 		XCTAssertFalse(store.resolveFailure(id: "nope", error: CancellationError()))
 	}
 
+	/// The store is `Sendable`: its state is serialized internally, so an
+	/// external consumer may hand it across isolation domains. RepoPrompt's
+	/// `CodexAppServerClient` still confines its instance to one actor, but
+	/// that is now an ownership choice rather than a memory-safety
+	/// precondition — the type used to carry unsynchronized mutable state
+	/// behind a doc-comment-only confinement rule.
+	func testRequestStoreIsSendableAndUsableAcrossIsolationDomains() async {
+		func requireSendable<Value: Sendable>(_ value: Value) -> Value { value }
+		let store = requireSendable(CodexRPCRequestStore())
+		let id = store.makeRequestID()
+		await Task.detached { store.scheduleTimeout(for: id, after: 60, onTimeout: { _, _ in }) }.value
+		XCTAssertEqual(store.timeoutTaskCount, 1)
+		store.failAll(error: CancellationError())
+		XCTAssertEqual(store.timeoutTaskCount, 0)
+	}
+
 	/// `PendingContinuation` is the type the owning actor must be able to
 	/// name when it registers a request.
 	func testPendingContinuationTypealiasIsPublic() async {

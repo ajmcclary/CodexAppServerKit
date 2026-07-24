@@ -1,12 +1,33 @@
 import Foundation
 
+// SEARCH-HELPER: request store, pending continuations, exactly-once, removal-before-resume, lock
 /// Sole owner of JSON-RPC request-side state for the Codex app-server client:
 /// request-ID allocation, pending continuations, per-request metadata, and
 /// timeout tasks, with exactly-once resolution enforced by removal-before-
-/// resume. Synchronous by design — the instance is owned by and executes
-/// under the client actor; it introduces no concurrency domain of its own
-/// (the detached timeout tasks only call the injected async callback).
-public final class CodexRPCRequestStore {
+/// resume.
+///
+/// **Concurrency.** Every method is synchronous and callable from any
+/// isolation domain: all mutable state is serialized by `lock`, so the type is
+/// `Sendable`. RepoPrompt's `CodexAppServerClient` still owns an instance and
+/// drives it from a single actor, which keeps the lock uncontended, but that
+/// confinement is now an ownership choice rather than a memory-safety
+/// precondition. It used to be the latter, documented only in this comment:
+/// the store handed out `Task.detached` timers while its three dictionaries
+/// and the ID counter were plain unsynchronized properties, so any caller that
+/// touched it from two domains corrupted Dictionary storage instead of
+/// producing a diagnostic (this package's own `failAll` test did exactly that
+/// — ThreadSanitizer reported a Swift access race in `register` and the suite
+/// crashed intermittently with SIGSEGV / `unrecognized selector` aborts, or
+/// hung).
+///
+/// **The lock is never held across a call-out.** Resuming a continuation,
+/// cancelling a timeout task, and invoking `fireTimeout`'s `poison` closure
+/// all run arbitrary caller code — and the production owner's `poison` closure
+/// re-enters this store through `failAll`. Each method therefore takes the
+/// state it needs under the lock, releases, and only then calls out. That
+/// ordering also preserves the removal-before-resume rule that makes
+/// resolution exactly-once.
+public final class CodexRPCRequestStore: @unchecked Sendable {
 	public init() {}
 
 	public typealias PendingContinuation = CheckedContinuation<[String: Any], Error>
@@ -21,20 +42,28 @@ public final class CodexRPCRequestStore {
 		}
 	}
 
+	/// Guards every stored property below. Non-recursive on purpose: a method
+	/// that re-enters the store while holding it is a defect, and the
+	/// call-out-after-unlock discipline is what prevents it.
+	private let lock = NSLock()
 	private var pendingContinuationsByID: [String: PendingContinuation] = [:]
 	private var metadataByID: [String: Metadata] = [:]
 	private var timeoutTasksByID: [String: Task<Void, Never>] = [:]
 	private var nextRequestID = 1
 
 	public func makeRequestID() -> String {
-		let value = nextRequestID
-		nextRequestID += 1
-		return String(value)
+		withLock {
+			let value = nextRequestID
+			nextRequestID += 1
+			return String(value)
+		}
 	}
 
 	public func register(id: String, metadata: Metadata, continuation: PendingContinuation) {
-		pendingContinuationsByID[id] = continuation
-		metadataByID[id] = metadata
+		withLock {
+			pendingContinuationsByID[id] = continuation
+			metadataByID[id] = metadata
+		}
 	}
 
 	public func scheduleTimeout(
@@ -43,11 +72,16 @@ public final class CodexRPCRequestStore {
 		onTimeout: @escaping @Sendable (String, TimeInterval) async -> Void
 	) {
 		guard timeout > 0 else { return }
-		timeoutTasksByID[id]?.cancel()
-		timeoutTasksByID[id] = Task.detached {
+		let task = Task.detached {
 			try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
 			await onTimeout(id, timeout)
 		}
+		let previous = withLock { () -> Task<Void, Never>? in
+			let previous = timeoutTasksByID[id]
+			timeoutTasksByID[id] = task
+			return previous
+		}
+		previous?.cancel()
 	}
 
 	/// Resolves a pending request with a success result. Returns false when
@@ -71,22 +105,32 @@ public final class CodexRPCRequestStore {
 	/// tear the transport down first, exactly as the legacy inline path did),
 	/// then resumes throwing `makeError(timeout)`. No-op when the request
 	/// already resolved.
+	///
+	/// `poison` runs after the lock is released precisely because the owner's
+	/// implementation re-enters this store (transport invalidation calls
+	/// `failAll`); the removal above the release is what stops that re-entrant
+	/// sweep from seeing — and double-resuming — this request.
 	public func fireTimeout(
 		id: String,
 		after timeout: TimeInterval,
 		poison: (Metadata) -> Void,
 		makeError: (TimeInterval) -> Error
 	) {
-		timeoutTasksByID.removeValue(forKey: id)
-		guard let continuation = pendingContinuationsByID.removeValue(forKey: id) else {
-			metadataByID.removeValue(forKey: id)
-			return
+		let taken = withLock { () -> (continuation: PendingContinuation, metadata: Metadata?)? in
+			// The task firing this call is the one being removed, so it is
+			// dropped rather than cancelled.
+			timeoutTasksByID.removeValue(forKey: id)
+			guard let continuation = pendingContinuationsByID.removeValue(forKey: id) else {
+				metadataByID.removeValue(forKey: id)
+				return nil
+			}
+			return (continuation, metadataByID.removeValue(forKey: id))
 		}
-		let metadata = metadataByID.removeValue(forKey: id)
-		if let metadata {
+		guard let taken else { return }
+		if let metadata = taken.metadata {
 			poison(metadata)
 		}
-		continuation.resume(throwing: makeError(timeout))
+		taken.continuation.resume(throwing: makeError(timeout))
 	}
 
 	/// Cancels a pending request (task-cancellation path).
@@ -98,23 +142,37 @@ public final class CodexRPCRequestStore {
 	/// Fails every pending request with `error` and cancels all timeout tasks
 	/// (transport-invalidation path).
 	public func failAll(error: Error) {
-		for task in timeoutTasksByID.values { task.cancel() }
-		timeoutTasksByID.removeAll()
-		let continuations = pendingContinuationsByID
-		pendingContinuationsByID.removeAll()
-		metadataByID.removeAll()
-		for continuation in continuations.values {
+		let taken = withLock { () -> (tasks: [Task<Void, Never>], continuations: [PendingContinuation]) in
+			let tasks = Array(timeoutTasksByID.values)
+			let continuations = Array(pendingContinuationsByID.values)
+			timeoutTasksByID.removeAll()
+			pendingContinuationsByID.removeAll()
+			metadataByID.removeAll()
+			return (tasks, continuations)
+		}
+		for task in taken.tasks { task.cancel() }
+		for continuation in taken.continuations {
 			continuation.resume(throwing: error)
 		}
 	}
 
 	private func take(id: String) -> PendingContinuation? {
-		timeoutTasksByID.removeValue(forKey: id)?.cancel()
-		metadataByID.removeValue(forKey: id)
-		return pendingContinuationsByID.removeValue(forKey: id)
+		let taken = withLock { () -> (continuation: PendingContinuation?, timeoutTask: Task<Void, Never>?) in
+			let timeoutTask = timeoutTasksByID.removeValue(forKey: id)
+			metadataByID.removeValue(forKey: id)
+			return (pendingContinuationsByID.removeValue(forKey: id), timeoutTask)
+		}
+		taken.timeoutTask?.cancel()
+		return taken.continuation
 	}
 
-	public var pendingCount: Int { pendingContinuationsByID.count }
-	public var timeoutTaskCount: Int { timeoutTasksByID.count }
-	public var peekNextRequestID: Int { nextRequestID }
+	public var pendingCount: Int { withLock { pendingContinuationsByID.count } }
+	public var timeoutTaskCount: Int { withLock { timeoutTasksByID.count } }
+	public var peekNextRequestID: Int { withLock { nextRequestID } }
+
+	private func withLock<Result>(_ body: () -> Result) -> Result {
+		lock.lock()
+		defer { lock.unlock() }
+		return body()
+	}
 }
