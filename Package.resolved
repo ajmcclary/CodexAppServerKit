@@ -1,13 +1,13 @@
 {
-  "originHash" : "d7ef139f147e1c978ea69b1b9bdae29b3e0175b4a2961f0fe1b221cdb422408b",
+  "originHash" : "7eb9e3fbab9e68c943b20ef3d2903c8bb4b59d9c0eb3914192946e96119cc853",
   "pins" : [
     {
       "identity" : "agentruntimekit",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ajmcclary/AgentRuntimeKit.git",
       "state" : {
-        "revision" : "09cdaf484aa2d03c86ef14ae0d4ae32e15c43a07",
-        "version" : "0.1.0-beta.1"
+        "revision" : "5b671bb221de2d19cc4d3456cf3013568b2743ca",
+        "version" : "0.1.0-beta.2"
       }
     },
     {
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ajmcclary/CodexRuntimeKit.git",
       "state" : {
-        "revision" : "2ae23801574e0e623972a7b150067e2ad9452106",
-        "version" : "0.1.0-beta.1"
+        "revision" : "78e36bfb7bbfc2d305e59cbf91f3f5c0a14029b2",
+        "version" : "0.1.0-beta.2"
       }
     },
     {
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ajmcclary/ProcessKit.git",
       "state" : {
-        "revision" : "1e58a5aedda64625a183a2d1dff5c12dd4cc7176",
-        "version" : "0.1.0-beta.4"
+        "revision" : "2accb5874c539b46be7bc72ddda24ce051c6aed9",
+        "version" : "0.1.0-beta.5"
       }
     }
   ],

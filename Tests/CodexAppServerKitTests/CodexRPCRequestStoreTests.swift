@@ -77,8 +77,12 @@ final class CodexRPCRequestStoreTests: XCTestCase {
 
 		// A sibling request the re-entrant sweep is expected to resume.
 		let (registrations, registered) = AsyncStream<Void>.makeStream()
+		// The `_ =` keeps this a `Task<Void, Error>`. `Task`'s Success must be
+		// Sendable under Swift 6 and `[String: Any]` is not. Only the thrown
+		// error was ever read from this task (see the `sibling.value` catch
+		// below), so discarding the resumed value costs the test nothing.
 		let sibling = Task {
-			try await withCheckedThrowingContinuation { (continuation: CodexRPCRequestStore.PendingContinuation) in
+			_ = try await withCheckedThrowingContinuation { (continuation: CodexRPCRequestStore.PendingContinuation) in
 				store.register(id: "sibling", metadata: .init(method: "thread/other", transportGeneration: 7), continuation: continuation)
 				registered.yield()
 			}
@@ -151,14 +155,17 @@ final class CodexRPCRequestStoreTests: XCTestCase {
 		// the store's dictionaries besides. The stream handshake sequences the
 		// setup explicitly, with no sleeping and no weakened assertions.
 		let (registrations, registered) = AsyncStream<Void>.makeStream()
+		// `_ =` keeps both tasks `Task<Void, Error>`: Swift 6 requires a
+		// Sendable Success and `[String: Any]` is not. Only the thrown errors
+		// are collected below, so the resumed values were already unused.
 		let first = Task {
-			try await withCheckedThrowingContinuation { (continuation: CodexRPCRequestStore.PendingContinuation) in
+			_ = try await withCheckedThrowingContinuation { (continuation: CodexRPCRequestStore.PendingContinuation) in
 				store.register(id: "1", metadata: .init(method: "a", transportGeneration: 1), continuation: continuation)
 				registered.yield()
 			}
 		}
 		let second = Task {
-			try await withCheckedThrowingContinuation { (continuation: CodexRPCRequestStore.PendingContinuation) in
+			_ = try await withCheckedThrowingContinuation { (continuation: CodexRPCRequestStore.PendingContinuation) in
 				store.register(id: "2", metadata: .init(method: "b", transportGeneration: 1), continuation: continuation)
 				store.scheduleTimeout(for: "2", after: 60, onTimeout: { _, _ in })
 				registered.yield()
@@ -212,6 +219,56 @@ final class CodexRPCRequestStoreTests: XCTestCase {
 	}
 
 	// MARK: - Concurrency regressions
+
+	/// Regression pin for the `nonisolated(unsafe)` payload handoff inside
+	/// `resolveSuccess`. `[String: Any]` is not Sendable, so Swift 6 cannot
+	/// check that the success value safely leaves the resolving domain and
+	/// reaches the awaiting one; the store asserts it instead. This drives that
+	/// exact crossing for real — the continuation is registered and awaited on
+	/// one task, `resolveSuccess` runs on a detached one — and asserts the
+	/// awaiting side observes precisely what was handed over, including a
+	/// reference-typed leaf (the only part of the payload that is actually
+	/// shared rather than copied).
+	func testResolveSuccessPayloadSurvivesACrossDomainHandoff() async throws {
+		let store = CodexRPCRequestStore()
+		let (registrations, registered) = AsyncStream<Void>.makeStream()
+
+		// The awaiting side owns its own domain: it registers, suspends, and
+		// only after resumption reduces the non-Sendable payload to Sendable
+		// facts — the reduction runs where the payload landed.
+		let awaiting = Task { () -> [String: String] in
+			let payload = try await withCheckedThrowingContinuation {
+				(continuation: CodexRPCRequestStore.PendingContinuation) in
+				store.register(
+					id: "handoff",
+					metadata: .init(method: "thread/start", transportGeneration: 3),
+					continuation: continuation
+				)
+				registered.yield()
+			}
+			return payload.reduce(into: [String: String]()) { out, entry in
+				out[entry.key] = String(describing: entry.value)
+			}
+		}
+		for await _ in registrations { break }
+		XCTAssertEqual(store.pendingCount, 1)
+
+		// Resolution from a DIFFERENT isolation domain than the awaiting task —
+		// this is the boundary the escape hatch covers.
+		let resolved = await Task.detached {
+			store.resolveSuccess(
+				id: "handoff",
+				result: ["scalar": 42, "leaf": NSString(string: "reference-typed")]
+			)
+		}.value
+		XCTAssertTrue(resolved)
+
+		let observed = try await awaiting.value
+		XCTAssertEqual(observed["scalar"], "42", "A value leaf crosses intact")
+		XCTAssertEqual(observed["leaf"], "reference-typed", "A reference leaf crosses intact")
+		XCTAssertEqual(observed.count, 2, "Nothing is added or dropped in transit")
+		XCTAssertEqual(store.pendingCount, 0)
+	}
 
 	/// Regression pin for the unsynchronized-store defect. Before the store
 	/// serialized its state, `nextRequestID += 1` and the three dictionaries

@@ -89,7 +89,40 @@ public final class CodexRPCRequestStore: @unchecked Sendable {
 	@discardableResult
 	public func resolveSuccess(id: String, result: [String: Any]) -> Bool {
 		guard let continuation = take(id: id) else { return false }
-		continuation.resume(returning: result)
+		// UNSAFE ESCAPE — the response payload crosses an isolation boundary
+		// here, and Swift 6 cannot prove it is safe.
+		//
+		// `CheckedContinuation.resume(returning:)` takes its value as `sending`
+		// (SE-0430) and `[String: Any]` is not Sendable, so the compiler
+		// requires proof that this call site holds the payload in a disconnected
+		// region. `result` is an ordinary parameter, so it is merged into the
+		// caller's region and no such proof exists. The proof-carrying spelling
+		// is `sending result: [String: Any]`, which would push the obligation
+		// onto callers where it belongs — but that changes a public signature,
+		// which this migration is not permitted to do. The obligation is
+		// therefore stated here instead of being checked.
+		//
+		// CALLER INVARIANT (this type cannot enforce it): nothing reachable from
+		// `result` may be mutated once it is handed over, because the resumed
+		// task reads it from another isolation domain. Note this is weaker than
+		// "the caller must not retain it": `[String: Any]` is a value type, so
+		// the dictionary structure is copied on handoff and only reference-typed
+		// leaves stay shared. RepoPrompt's `CodexAppServerClient.route(_:)` does
+		// still hold `result` (through the `json` object it was destructured
+		// from) for the remainder of that function — that is fine, and it is why
+		// the invariant is phrased as no-mutation rather than no-retention. Its
+		// leaves are immutable `NSString`/`NSNumber`/`NSNull`/`NSArray`/
+		// `NSDictionary` instances produced by `JSONSerialization`.
+		//
+		// What this store itself guarantees: it never reads, writes, stores, or
+		// copies the payload. It arrives, it is forwarded to the continuation in
+		// the next statement, and no reference to it survives this call.
+		//
+		// This is the same obligation that held before the migration — Swift 6
+		// makes it visible rather than creating it. Exercised by
+		// `testResolveSuccessPayloadSurvivesACrossDomainHandoff`.
+		nonisolated(unsafe) let payload = result
+		continuation.resume(returning: payload)
 		return true
 	}
 

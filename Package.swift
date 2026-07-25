@@ -55,12 +55,16 @@ import PackageDescription
 //   ProcessKit's `ProcessStreamFraming` product, shared with RepoPrompt's
 //   Claude / ACP / Gemini / Codex-exec consumers.
 //
-// Platform floor: macOS 14 ONLY — a deliberate divergence from the
-// macOS 14 + iOS 17 kits. `CodexAppServerProcessTransport` uses
+// Platform floor: macOS 27 ONLY — a deliberate divergence from the
+// multi-platform kits. `CodexAppServerProcessTransport` uses
 // `ProcessKit.SpawnedProcess` / `ProcessLauncher` unconditionally, and
 // those are declared inside `#if canImport(AppKit)` (macOS), so an iOS
 // floor would be unprovable. The ApplyEditsKit precedent: claim only what
 // a clean build proves.
+//
+// The floor is spelled as the STRING `.macOS("27.0")` on purpose: the
+// `.v27` enum case requires swift-tools-version 6.4, and this manifest
+// stays at 6.0.
 //
 // Package dependencies:
 // - AgentRuntimeKit — `CodexAppServerRequestID` crosses the boundary in
@@ -74,13 +78,17 @@ import PackageDescription
 //   `CodexClientError` values, exactly as it did in RepoPromptCore. The
 //   library target does not link it, so library consumers do not either.
 //
-// Swift 5 language mode keeps the moved code byte-behaviorally identical
-// (AgentRuntimeKit / PromptAssemblyKit / ApplyEditsKit / CodexRuntimeKit /
-// RepoPromptCore promoted-target precedent).
+// Language mode: Swift 6, with strict concurrency checking, on every
+// Swift target including the tests.
+let swiftSettings: [SwiftSetting] = [
+    .swiftLanguageMode(.v6),
+    .enableExperimentalFeature("StrictConcurrency")
+]
+
 let package = Package(
     name: "CodexAppServerKit",
     platforms: [
-        .macOS(.v14)
+        .macOS("27.0")
     ],
     products: [
         .library(name: "CodexAppServerKit", targets: ["CodexAppServerKit"])
@@ -106,7 +114,7 @@ let package = Package(
                 .product(name: "ProcessKit", package: "ProcessKit"),
                 .product(name: "ProcessStreamFraming", package: "ProcessKit")
             ],
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            swiftSettings: swiftSettings
         ),
         .testTarget(
             name: "CodexAppServerKitTests",
@@ -114,7 +122,7 @@ let package = Package(
                 "CodexAppServerKit",
                 .product(name: "CodexRuntimeKit", package: "CodexRuntimeKit")
             ],
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            swiftSettings: swiftSettings
         )
     ]
 )
