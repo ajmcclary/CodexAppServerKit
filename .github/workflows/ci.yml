@@ -3,11 +3,25 @@
 # (run by Scripts/verify-all) fails when this file drifts.
 name: CI
 
+# Documentation-only pushes and PRs skip CI (see `paths`); the weekly schedule
+# and manual runs always run.
 on:
   push:
     branches: [main]
+    paths:
+      - '**'
+      - '!**/*.md'
+      - '!docs/**'
+      - '!LICENSE*'
+      - '!.gitignore'
   pull_request:
     branches: [main]
+    paths:
+      - '**'
+      - '!**/*.md'
+      - '!docs/**'
+      - '!LICENSE*'
+      - '!.gitignore'
   schedule:
     # Weekly, so upstream dependency rot (a dead submodule URL, a yanked tag)
     # surfaces within days instead of at the next push.
