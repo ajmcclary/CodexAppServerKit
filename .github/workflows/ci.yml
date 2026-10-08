@@ -3,17 +3,13 @@
 # (run by Scripts/verify-all) fails when this file drifts.
 name: CI
 
-# Documentation-only pushes and PRs skip CI (see `paths`); the weekly schedule
-# and manual runs always run.
+# Pushes to main run nothing (owner decision, 2026-10-08: commits land on
+# main directly and the full suite is heavy). The full suite runs on release
+# tags, on pull requests (documentation-only PRs skip, see `paths`), weekly,
+# and on manual dispatch (Actions > CI > Run workflow).
 on:
   push:
-    branches: [main]
-    paths:
-      - '**'
-      - '!**/*.md'
-      - '!docs/**'
-      - '!LICENSE*'
-      - '!.gitignore'
+    tags: ["*"]
   pull_request:
     branches: [main]
     paths:
