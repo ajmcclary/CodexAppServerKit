@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ajmcclary/CodexRuntimeKit.git",
       "state" : {
-        "revision" : "78e36bfb7bbfc2d305e59cbf91f3f5c0a14029b2",
-        "version" : "0.1.0-beta.2"
+        "revision" : "c9c724c78a4341f71990a97c8e5d3aff56970c0f",
+        "version" : "0.1.0-beta.4"
       }
     },
     {
