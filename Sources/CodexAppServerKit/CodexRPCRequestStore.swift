@@ -71,9 +71,9 @@ public final class CodexRPCRequestStore: @unchecked Sendable {
 		after timeout: TimeInterval,
 		onTimeout: @escaping @Sendable (String, TimeInterval) async -> Void
 	) {
-		guard timeout > 0 else { return }
+		guard let nanoseconds = Self.sleepNanoseconds(forTimeout: timeout) else { return }
 		let task = Task.detached {
-			try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+			try? await Task.sleep(nanoseconds: nanoseconds)
 			await onTimeout(id, timeout)
 		}
 		let previous = withLock { () -> Task<Void, Never>? in
@@ -82,6 +82,19 @@ public final class CodexRPCRequestStore: @unchecked Sendable {
 			return previous
 		}
 		previous?.cancel()
+	}
+
+	/// Longest timeout honoured, in seconds (about 31.7 years). Longer finite
+	/// timeouts are clamped to it; `UInt64(seconds * 1e9)` would trap above
+	/// roughly 1.8e10 seconds.
+	static let maxTimeoutSeconds: TimeInterval = 1_000_000_000
+
+	/// Converts a caller-supplied timeout to a sleep length, or nil when there is
+	/// no deadline to schedule: non-positive, NaN, or infinite (which callers use
+	/// to mean "none").
+	static func sleepNanoseconds(forTimeout timeout: TimeInterval) -> UInt64? {
+		guard timeout > 0, timeout.isFinite else { return nil }
+		return UInt64(min(timeout, maxTimeoutSeconds) * 1_000_000_000)
 	}
 
 	/// Resolves a pending request with a success result. Returns false when

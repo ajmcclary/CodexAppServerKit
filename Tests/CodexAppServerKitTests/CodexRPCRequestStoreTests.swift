@@ -209,6 +209,22 @@ final class CodexRPCRequestStoreTests: XCTestCase {
 		XCTAssertEqual(store.timeoutTaskCount, 0)
 	}
 
+	func testScheduleTimeoutHandlesNonFiniteAndHugeTimeoutsWithoutTrapping() async throws {
+		let store = CodexRPCRequestStore()
+		// Infinity means "no deadline"; NaN is not a deadline either.
+		store.scheduleTimeout(for: "inf", after: .infinity, onTimeout: { _, _ in XCTFail("infinite timeout fired") })
+		store.scheduleTimeout(for: "nan", after: .nan, onTimeout: { _, _ in XCTFail("NaN timeout fired") })
+		XCTAssertEqual(store.timeoutTaskCount, 0)
+		// Larger than UInt64 nanoseconds can hold: clamped, not trapped.
+		store.scheduleTimeout(for: "huge", after: 1e12, onTimeout: { _, _ in XCTFail("huge timeout fired") })
+		store.scheduleTimeout(for: "edge", after: Double(UInt64.max) / 1_000_000_000, onTimeout: { _, _ in XCTFail("edge timeout fired") })
+		XCTAssertEqual(store.timeoutTaskCount, 2)
+		// Give the detached timers time to convert their interval and start sleeping.
+		try await Task.sleep(for: .milliseconds(100))
+		store.failAll(error: CodexClientError.processNotRunning)
+		XCTAssertEqual(store.timeoutTaskCount, 0)
+	}
+
 	func testReschedulingATimeoutReplacesRatherThanAccumulates() {
 		let store = CodexRPCRequestStore()
 		store.scheduleTimeout(for: "1", after: 60, onTimeout: { _, _ in })
