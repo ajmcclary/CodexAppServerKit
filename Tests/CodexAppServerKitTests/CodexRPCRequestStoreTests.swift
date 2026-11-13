@@ -210,17 +210,26 @@ final class CodexRPCRequestStoreTests: XCTestCase {
 	}
 
 	func testScheduleTimeoutHandlesNonFiniteAndHugeTimeoutsWithoutTrapping() async throws {
+		final class Fired: @unchecked Sendable {
+			private let lock = NSLock(); private var ids: [String] = []
+			func add(_ id: String) { lock.lock(); ids.append(id); lock.unlock() }
+			var values: [String] { lock.lock(); defer { lock.unlock() }; return ids }
+		}
+		let fired = Fired()
 		let store = CodexRPCRequestStore()
 		// Infinity means "no deadline"; NaN is not a deadline either.
-		store.scheduleTimeout(for: "inf", after: .infinity, onTimeout: { _, _ in XCTFail("infinite timeout fired") })
-		store.scheduleTimeout(for: "nan", after: .nan, onTimeout: { _, _ in XCTFail("NaN timeout fired") })
+		store.scheduleTimeout(for: "inf", after: .infinity, onTimeout: { id, _ in fired.add(id) })
+		store.scheduleTimeout(for: "nan", after: .nan, onTimeout: { id, _ in fired.add(id) })
 		XCTAssertEqual(store.timeoutTaskCount, 0)
 		// Larger than UInt64 nanoseconds can hold: clamped, not trapped.
-		store.scheduleTimeout(for: "huge", after: 1e12, onTimeout: { _, _ in XCTFail("huge timeout fired") })
-		store.scheduleTimeout(for: "edge", after: Double(UInt64.max) / 1_000_000_000, onTimeout: { _, _ in XCTFail("edge timeout fired") })
+		store.scheduleTimeout(for: "huge", after: 1e12, onTimeout: { id, _ in fired.add(id) })
+		store.scheduleTimeout(for: "edge", after: Double(UInt64.max) / 1_000_000_000, onTimeout: { id, _ in fired.add(id) })
 		XCTAssertEqual(store.timeoutTaskCount, 2)
 		// Give the detached timers time to convert their interval and start sleeping.
 		try await Task.sleep(for: .milliseconds(100))
+		// Asserted before failAll: a cancelled timer still invokes onTimeout (the
+		// store's fireTimeout then finds nothing pending), so later calls are expected.
+		XCTAssertEqual(fired.values, [], "no clamped or non-finite timeout elapsed")
 		store.failAll(error: CodexClientError.processNotRunning)
 		XCTAssertEqual(store.timeoutTaskCount, 0)
 	}
