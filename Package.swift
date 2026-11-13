@@ -97,14 +97,14 @@ let package = Package(
         // Provider-neutral agent vocabulary: CodexAppServerRequestID.
         // Prerelease lower bound named explicitly (SwiftPM only resolves
         // prerelease tags when the requirement names one — ProcessKit rule).
-        .package(url: "https://github.com/ajmcclary/AgentRuntimeKit.git", .upToNextMinor(from: "0.1.0-beta.1")),
+        .package(url: "https://github.com/ajmcclary/AgentRuntimeKit.git", .upToNextMinor(from: "0.1.0-beta.3")),
         // Process primitives + the NDJSON framing layer. 0.1.0-beta.4 is the
         // first tag carrying the separately-linkable ProcessStreamFraming
         // product this package's decoder requires.
-        .package(url: "https://github.com/ajmcclary/ProcessKit.git", .upToNextMinor(from: "0.1.0-beta.4")),
+        .package(url: "https://github.com/ajmcclary/ProcessKit.git", .upToNextMinor(from: "0.1.0-beta.6")),
         // Test target only — CodexClientError in the moved request-store
         // characterization suite. Not a library dependency.
-        .package(url: "https://github.com/ajmcclary/CodexRuntimeKit.git", .upToNextMinor(from: "0.1.0-beta.1"))
+        .package(url: "https://github.com/ajmcclary/CodexRuntimeKit.git", .upToNextMinor(from: "0.1.0-beta.5"))
     ],
     targets: [
         .target(
