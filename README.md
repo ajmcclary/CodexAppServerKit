@@ -60,9 +60,9 @@ choice of termination policy, logging, and UI. The transport takes these as inpu
 
 ```swift
 dependencies: [
-    // 0.1.0-beta.5 is a prerelease identifier — SwiftPM only resolves
+    // 0.1.0-beta.6 is a prerelease identifier — SwiftPM only resolves
     // prerelease tags when the lower bound itself names one.
-    .package(url: "https://github.com/ajmcclary/CodexAppServerKit.git", .upToNextMinor(from: "0.1.0-beta.5"))
+    .package(url: "https://github.com/ajmcclary/CodexAppServerKit.git", .upToNextMinor(from: "0.1.0-beta.6"))
 ]
 ```
 
@@ -72,16 +72,15 @@ dependencies: [
 ])
 ```
 
-The transport's API uses ProcessKit types (`SpawnedProcess`, `ProcessTerminationPolicy`), and a
-write handler usually calls `FDWriteSupport`; if you drive the transport, also depend on
-[ProcessKit](https://github.com/ajmcclary/ProcessKit) and `import ProcessKit`.
+`import CodexAppServerKit` also re-exports [ProcessKit](https://github.com/ajmcclary/ProcessKit),
+whose types (`SpawnedProcess`, `ProcessTerminationPolicy`, `FDWriteSupport`) appear in or are
+used with the transport's API, so you don't need a separate dependency to name them.
 
 ## Usage
 
 ```swift
 import CodexAppServerKit
 import Foundation
-import ProcessKit
 
 /// Spawns `codex app-server`, sends `initialize`, and routes what comes back.
 /// `codexPath` and `environment` come from your own resolution policy.
